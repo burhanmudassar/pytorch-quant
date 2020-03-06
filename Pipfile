@@ -1,0 +1,20 @@
+[[source]]
+name = "pypi"
+url = "https://pypi.org/simple"
+verify_ssl = true
+
+[dev-packages]
+
+[packages]
+numpy = "*"
+matplotlib = "*"
+scipy = "*"
+numba = "*"
+opencv-python = "*"
+torch = ">=1.3.0"
+torchvision = "*"
+tensorboardX = "*"
+PyYAML = "*"
+
+[requires]
+python_version = "3.5"
