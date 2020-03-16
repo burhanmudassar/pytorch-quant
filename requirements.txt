@@ -8,3 +8,4 @@ pyyaml
 https://download.pytorch.org/whl/cpu/torch-1.4.0%2Bcpu-cp35-cp35m-linux_x86_64.whl
 https://download.pytorch.org/whl/cpu/torchvision-0.5.0%2Bcpu-cp35-cp35m-linux_x86_64.whl
 tensorflow-cpu
+tqdm

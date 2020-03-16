@@ -55,7 +55,7 @@ if __name__ == '__main__':
     eval_batch_size = 1
     data_path = 'data/imagenet_1k'
     saved_model_dir = 'data/'
-    float_model_file = 'data/mobilenet_v2_1.0_224_quant.tflite'
+    float_model_file = 'models_old/mobilenet_v2_1.0_224_quant.tflite'
 
     input_mean = 127.5
     input_std = 127.5

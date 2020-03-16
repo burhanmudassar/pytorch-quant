@@ -3,18 +3,39 @@ import torch
 import torch.nn as nn
 import torchvision
 import torchvision.transforms as transforms
-from torch.quantization import QuantStub, DeQuantStub
 
 from libs.utils import load_model
-from libs.utils import print_size_of_model
-from libs.utils import evaluate
-from libs.utils import run_benchmark
+from libs.utils import print_model_stats
+from libs.utils import savemodel_scripted
+from libs.utils import quantization_post_dynamic
+from libs.utils import quantization_post_dynamicx86
+from libs.utils import quantization_qat
 
-from torchvision.models.utils import load_state_dict_from_url
+from PIL import Image
+import numpy as np
+import cv2
 
 
-# Fix for windows quantization
-# torch.backends.quantized.engine = 'qnnpack'
+class cv2Resize(object):
+    def __init__(self, size):
+        self.size = size
+
+    def __call__(self, im):
+        im = np.array(im)
+        if isinstance(self.size, int):
+            h, w = im.shape[:2]
+            if (w <= h and w == self.size) or (h <= w and h == self.size):
+                return Image.fromarray(im)
+            if w < h:
+                ow = self.size
+                oh = int(self.size * h / w)
+                return Image.fromarray(cv2.resize(im, (ow, oh)))
+            else:
+                oh = self.size
+                ow = int(self.size * w / h)
+                return Image.fromarray(cv2.resize(im, (ow, oh)))
+        else:
+            return Image.fromarray(cv2.resize(im, self.size[::-1]))
 
 def prepare_data_loaders(data_path):
 
@@ -35,7 +56,7 @@ def prepare_data_loaders(data_path):
     dataset_test = torchvision.datasets.ImageFolder(
         valdir,
         transforms.Compose([
-            transforms.Resize(256),
+            cv2Resize(256),
             transforms.CenterCrop(224),
             transforms.ToTensor(),
             normalize,
@@ -56,95 +77,44 @@ def prepare_data_loaders(data_path):
 
 if __name__ == '__main__':
     data_path = 'data/imagenet_1k'
-    saved_model_dir = 'data/'
+    saved_model_dir = 'models/'
     float_model_file = 'mobilenet_pretrained_float.pth'
-    scripted_float_model_file = 'mobilenet_v2_fp32_scripted.pth'
-    scripted_quantized1_model_file = 'mobilenet_v2_int8_dynamic.pth'
-    scripted_quantized2_model_file = 'mobilenet_v2_int8_static_qnnpack.pth'
 
     train_batch_size = 30
     eval_batch_size = 10
     num_eval_batches = 100
-    num_calibration_batches = 5
+    num_train_batches = 10
+    num_calibration_batches = 10
+
+    DEBUG_FLOAT_BENCHMARK = True
+    DEBUG_DYNAMIC = True
+    DEBUG_DYNAMIC_x86 = True
+    DEBUG_QAT = True
 
     data_loader, data_loader_test = prepare_data_loaders(data_path)
     criterion = nn.CrossEntropyLoss()
-    float_model = load_model(saved_model_dir + float_model_file).to('cpu')
+    float_model = load_model(saved_model_dir + float_model_file)
 
-    # Baseline EVAL
-    # print('\n Inverted Residual Block: Before fusion \n\n', float_model.features[1].conv)
-    # float_model.eval()
-    #
-    # # Fuses modules
-    # float_model.fuse_model()
-    #
-    # # Note fusion of Conv+BN+Relu and Conv+Relu
-    # print('\n Inverted Residual Block: After fusion\n\n', float_model.features[1].conv)
-    #
-    # ### Baseline accuracy
-    #
-    # print("Size of baseline model")
-    # print_size_of_model(float_model)
-    #
-    # top1, top5 = evaluate(float_model, criterion, data_loader_test, neval_batches=num_eval_batches)
-    # print('Evaluation accuracy on %d images, %2.2f' % (num_eval_batches * eval_batch_size, top1.avg))
-    # torch.jit.save(torch.jit.script(float_model), saved_model_dir + scripted_float_model_file)
-    #
-    #
-    # # Quantization - Post
-    num_calibration_batches = 30
-    #
-    # myModel = load_model(saved_model_dir + float_model_file).to('cpu')
-    # myModel.eval()
-    # # #
-    # # # # Fuse Conv, bn and relu
-    # myModel.fuse_model()
-    # #
-    # # # # Specify quantization configuration
-    # # # # Start with simple min/max range estimation and per-tensor quantization of weights
-    # myModel.qconfig = torch.quantization.default_qconfig
-    # print(myModel.qconfig)
-    # torch.quantization.prepare(myModel, inplace=True)
-    #
-    # # # Calibrate first
-    # # print('Post Training Quantization Prepare: Inserting Observers')
-    # # print('\n Inverted Residual Block:After observer insertion \n\n', myModel.features[1].conv)
-    # #
-    # # # Calibrate with the training set
-    # # evaluate(myModel, criterion, data_loader, neval_batches=num_calibration_batches)
-    # # print('Post Training Quantization: Calibration done')
-    # #
-    # # # Convert to quantized model
-    # # torch.quantization.convert(myModel, inplace=True)
-    # # print('Post Training Quantization: Convert done')
-    # # print('\n Inverted Residual Block: After fusion and quantization, note fused modules: \n\n',
-    # #       myModel.features[1].conv)
-    # #
-    # # print("Size of model after quantization")
-    # # print_size_of_model(myModel)
-    # #
-    # # top1, top5 = evaluate(myModel, criterion, data_loader_test, neval_batches=num_eval_batches)
-    # # print('Evaluation accuracy on %d images, %2.2f' % (num_eval_batches * eval_batch_size, top1.avg))
-    # # torch.jit.save(torch.jit.script(myModel), saved_model_dir + scripted_quantized1_model_file)
-    #
-    #
-    # Quantization - x86 Aware
-    per_channel_quantized_model = load_model(saved_model_dir + float_model_file).to('cpu')
-    per_channel_quantized_model.eval()
-    per_channel_quantized_model.fuse_model()
-    per_channel_quantized_model.qconfig = torch.quantization.get_default_qconfig('qnnpack')
-    print(per_channel_quantized_model.qconfig)
+    if DEBUG_FLOAT_BENCHMARK:
+        float_model_scripted = savemodel_scripted(float_model, saved_model_dir + 'mobilenet_pretrained_float_scripted.pth')
+        print_model_stats(float_model_scripted, criterion, data_loader_test, num_eval_batches=num_eval_batches, eval_batch_size=eval_batch_size)
 
-    torch.quantization.prepare(per_channel_quantized_model, inplace=True)
-    evaluate(per_channel_quantized_model, criterion, data_loader, num_calibration_batches)
-    torch.quantization.convert(per_channel_quantized_model, inplace=True)
-    top1, top5 = evaluate(per_channel_quantized_model, criterion, data_loader_test, neval_batches=num_eval_batches)
-    print('Evaluation accuracy on %d images, %2.2f' % (num_eval_batches * eval_batch_size, top1.avg))
-    torch.jit.save(torch.jit.script(per_channel_quantized_model), saved_model_dir + scripted_quantized2_model_file)
-    print("Size of model after quantization")
-    print_size_of_model(per_channel_quantized_model)
+    # dynamic
+    if DEBUG_DYNAMIC:
+        modelPostDynamic = quantization_post_dynamic(saved_model_dir + float_model_file, criterion, data_loader, data_loader_test, num_calibration_batches)
+        print_model_stats(modelPostDynamic, criterion, data_loader_test, num_eval_batches=num_eval_batches, eval_batch_size=eval_batch_size)
+        savemodel_scripted(modelPostDynamic, saved_model_dir + 'mobilenet_v2_int8_dynamic.pth')
 
-    # Do benchmarking
-    run_benchmark(saved_model_dir + scripted_float_model_file, data_loader_test)
-    # run_benchmark(saved_model_dir + scripted_quantized1_model_file, data_loader_test)
-    run_benchmark(saved_model_dir + scripted_quantized2_model_file, data_loader_test)
+    # x86 aware
+    if DEBUG_DYNAMIC_x86:
+        modelPostDynamic_x86 = quantization_post_dynamicx86(saved_model_dir + float_model_file, criterion, data_loader,
+                                                    data_loader_test, num_calibration_batches)
+        print_model_stats(modelPostDynamic_x86, criterion, data_loader_test, num_eval_batches=num_eval_batches, eval_batch_size=eval_batch_size)
+        savemodel_scripted(modelPostDynamic_x86, saved_model_dir + 'mobilenet_v2_int8_dynamicx86.pth')
+
+    # qat-aware training
+    if DEBUG_QAT:
+        modelQAT = quantization_qat(saved_model_dir + float_model_file, criterion, data_loader, data_loader_test, num_train_batches=num_train_batches, num_eval_batches=num_eval_batches)
+        print_model_stats(modelQAT, criterion, data_loader_test, num_eval_batches=num_eval_batches, eval_batch_size=eval_batch_size)
+        savemodel_scripted(modelQAT, saved_model_dir + 'mobilenet_v2_int8_qat.pth')
+
